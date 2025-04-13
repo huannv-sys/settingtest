@@ -4,11 +4,14 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.11"
 dependencies = [
+    "flask>=3.1.0",
+    "flask-cors>=5.0.1",
     "joblib>=1.4.2",
     "matplotlib>=3.10.1",
     "numpy>=2.2.4",
     "openai>=1.72.0",
     "pandas>=2.2.3",
+    "psycopg2-binary>=2.9.10",
     "scikit-learn>=1.6.1",
     "trafilatura>=2.0.0",
 ]
