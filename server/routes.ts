@@ -1953,6 +1953,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   router.post("/security/analyze-real-traffic", async (req: Request, res: Response) => {
     try {
       const deviceId = parseInt(req.body.deviceId || '1');
+      const autoMode = req.body.autoMode === true; // Chế độ tự động giám sát
       
       // Lấy thông tin thiết bị từ storage service
       const device = await storage.getDevice(deviceId);
@@ -1996,7 +1997,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           data: { 
             connectionCount: 0, 
             analyzedCount: 0, 
-            anomalyCount: 0 
+            anomalyCount: 0,
+            autoMode: autoMode
           }
         });
       }
@@ -2055,6 +2057,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Lọc các kết quả bất thường
       const anomalies = results.filter(r => r && r.isAnomaly);
       
+      // Lọc các bất thường có độ tin cậy cao (>= 90%)
+      const highConfidenceAnomalies = anomalies.filter(a => a.probability >= 0.9);
+      
       // Chuẩn bị kết quả phân tích chi tiết
       const anomalyDetails = anomalies.map((a, index) => {
         const trafficEntry = trafficEntries[results.indexOf(a)];
@@ -2067,20 +2072,111 @@ export async function registerRoutes(app: Express): Promise<Server> {
           destinationPort: trafficEntry.destinationPort,
           protocol: trafficEntry.protocol,
           probability: a?.probability,
+          confidenceLevel: (a?.probability * 100).toFixed(1) + '%',
           anomalyType: a?.anomalyType,
           description: a?.description,
-          timestamp: a?.timestamp
+          timestamp: a?.timestamp,
+          highConfidence: a?.probability >= 0.9 // Đánh dấu các cảnh báo có độ tin cậy cao
         };
       });
       
+      // Nếu đang ở chế độ tự động, cài đặt một giám sát mới sau 5 phút
+      if (autoMode && typeof (global as any).securityMonitorTimers === 'undefined') {
+        (global as any).securityMonitorTimers = {};
+      }
+      
+      if (autoMode) {
+        // Xóa timer cũ nếu có
+        if ((global as any).securityMonitorTimers[deviceId]) {
+          clearTimeout((global as any).securityMonitorTimers[deviceId]);
+        }
+        
+        // Thiết lập giám sát mới sau 5 phút
+        (global as any).securityMonitorTimers[deviceId] = setTimeout(async () => {
+          try {
+            // Kết nối đến thiết bị
+            await mikrotikService.connectToDevice(deviceId);
+            const autoClient = mikrotikService.getClientForDevice(deviceId);
+            
+            if (autoClient) {
+              // Lấy dữ liệu kết nối
+              const autoConnectionData = await autoClient.executeCommand('/ip/firewall/connection/print');
+              
+              // Biến đổi dữ liệu
+              const autoTrafficEntries: import('./services/ids').TrafficData[] = [];
+              
+              for (const conn of autoConnectionData) {
+                if (conn['protocol'] && conn['src-address'] && conn['dst-address']) {
+                  const srcParts = conn['src-address'].split(':');
+                  const dstParts = conn['dst-address'].split(':');
+                  
+                  const srcIp = srcParts[0];
+                  const dstIp = dstParts[0];
+                  const srcPort = parseInt(srcParts[1] || '0', 10);
+                  const dstPort = parseInt(dstParts[1] || '0', 10);
+                  
+                  const txBytes = parseInt(conn['orig-bytes'] || '0', 10);
+                  const rxBytes = parseInt(conn['repl-bytes'] || '0', 10);
+                  const totalBytes = txBytes + rxBytes;
+                  
+                  const txPackets = parseInt(conn['orig-packets'] || '0', 10);
+                  const rxPackets = parseInt(conn['repl-packets'] || '0', 10);
+                  const totalPackets = txPackets + rxPackets;
+                  
+                  let flowDuration = 1000;
+                  if (conn['tcp-state'] || conn['timeout']) {
+                    flowDuration = parseInt(conn['timeout'] || '60', 10) * 1000;
+                  }
+                  
+                  autoTrafficEntries.push({
+                    sourceIp: srcIp,
+                    destinationIp: dstIp,
+                    sourcePort: srcPort,
+                    destinationPort: dstPort,
+                    protocol: conn['protocol'].toLowerCase(),
+                    bytes: totalBytes,
+                    packetCount: totalPackets,
+                    flowDuration: flowDuration,
+                    timestamp: new Date(),
+                    deviceId: deviceId
+                  });
+                }
+              }
+              
+              // Phân tích dữ liệu
+              await Promise.all(
+                autoTrafficEntries.map(data => idsService.analyzeTraffic(data))
+              );
+              
+              console.log(`[AUTO MONITOR] Đã phân tích ${autoTrafficEntries.length} kết nối tự động cho thiết bị ${deviceId}`);
+              
+              // Tự động đặt lại timer cho lần sau
+              (global as any).securityMonitorTimers[deviceId] = setTimeout(arguments.callee, 5 * 60 * 1000);
+            }
+          } catch (autoError) {
+            console.error(`[AUTO MONITOR] Lỗi khi tự động giám sát thiết bị ${deviceId}:`, autoError);
+            
+            // Thử lại sau 10 phút nếu gặp lỗi
+            (global as any).securityMonitorTimers[deviceId] = setTimeout(arguments.callee, 10 * 60 * 1000);
+          } finally {
+            await mikrotikService.disconnectFromDevice(deviceId);
+          }
+        }, 5 * 60 * 1000); // 5 phút
+        
+        console.log(`Đã cài đặt chế độ tự động giám sát cho thiết bị ${device.name} (ID: ${deviceId})`);
+      }
+      
       res.json({
         success: true,
-        message: `Phân tích hoàn tất. Phát hiện ${anomalies.length}/${trafficEntries.length} bất thường`,
+        message: `Phân tích hoàn tất. Phát hiện ${anomalies.length}/${trafficEntries.length} bất thường (${highConfidenceAnomalies.length} có độ tin cậy cao)${autoMode ? '. Đã bật chế độ tự động giám sát' : ''}`,
         data: {
           connectionCount: connectionData.length,
           analyzedCount: trafficEntries.length,
           anomalyCount: anomalies.length,
+          highConfidenceCount: highConfidenceAnomalies.length,
           anomalyPercentage: trafficEntries.length > 0 ? (anomalies.length / trafficEntries.length) * 100 : 0,
+          autoMode: autoMode,
+          nextScanIn: autoMode ? '5 phút' : null,
           anomalies: anomalyDetails
         }
       });

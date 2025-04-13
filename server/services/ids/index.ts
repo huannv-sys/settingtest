@@ -308,16 +308,32 @@ export class IDSService {
    */
   private async createAlert(result: PredictionResult, trafficData: TrafficData): Promise<void> {
     try {
+      // Chỉ tạo cảnh báo nếu độ tin cậy (probability) của bất thường cao hơn ngưỡng (>= 90%)
+      // Lưu ý: probability càng cao càng chắc chắn là bất thường
+      if (result.probability < 0.9) {
+        logger.debug(`Anomaly detected but confidence too low (${result.probability * 100}%) - không tạo cảnh báo cho ${trafficData.sourceIp}`);
+        return; // Không tạo cảnh báo nếu độ tin cậy thấp
+      }
+      
       // Create a more detailed message if we have anomaly type information
       let alertMessage = `Possible intrusion detected: ${trafficData.sourceIp}:${trafficData.sourcePort} -> ${trafficData.destinationIp}:${trafficData.destinationPort} (${trafficData.protocol.toUpperCase()})`;
       
+      // Thêm thông tin về độ tin cậy vào thông báo cảnh báo
       if (result.anomalyType) {
-        alertMessage = `${result.anomalyType}: ${result.description || alertMessage}`;
+        alertMessage = `${result.anomalyType}: ${result.description || alertMessage} (Độ tin cậy: ${(result.probability * 100).toFixed(1)}%)`;
+      }
+      
+      // Xác định mức độ nghiêm trọng dựa trên probability
+      let severity = 'warning';
+      if (result.probability >= 0.95) {
+        severity = 'error'; // Rất nghiêm trọng (95-100%)
+      } else if (result.probability >= 0.9) {
+        severity = 'warning'; // Nghiêm trọng (90-95%)
       }
       
       const alertResult = await db.insert(alerts).values({
         deviceId: trafficData.deviceId,
-        severity: 'error',
+        severity: severity,
         message: alertMessage,
         acknowledged: false,
         timestamp: new Date(),
@@ -368,7 +384,7 @@ export class IDSService {
                 alertId: alertId,
                 deviceId: trafficData.deviceId,
                 message: alertMessage,
-                severity: 'error',
+                severity: severity,
                 source: 'ids',
                 details: {
                   sourceIp: trafficData.sourceIp,
