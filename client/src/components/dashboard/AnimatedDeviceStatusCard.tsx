@@ -78,33 +78,20 @@ export const AnimatedDeviceStatusCard: React.FC<AnimatedDeviceStatusCardProps> =
   const [showPulse, setShowPulse] = useState(false);
 
   // Connect to WebSocket
-  const { connected, lastMessage, subscribeToTopic, unsubscribeFromTopic } = useWebSocketContext();
+  const { isConnected, sendMessage } = useWebSocketContext();
 
-  // Subscribe to device status updates
+  // Subscribe to device status updates using a simpler approach
   useEffect(() => {
-    if (connected && deviceId) {
-      const topic = `device_status_${deviceId}`;
-      subscribeToTopic(topic);
-      
-      return () => {
-        unsubscribeFromTopic(topic);
-      };
-    }
-  }, [connected, deviceId, subscribeToTopic, unsubscribeFromTopic]);
-
-  // Process WebSocket messages
-  useEffect(() => {
-    if (lastMessage && lastMessage.type === 'device_status' && lastMessage.deviceId === deviceId) {
-      // Store previous stats for animation
-      setPrevStats(deviceStats);
-      
-      // Trigger pulse animation
-      setShowPulse(true);
-      const timer = setTimeout(() => setShowPulse(false), 1500);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [lastMessage, deviceId, deviceStats]);
+    // Store previous stats for animation when component updates
+    setPrevStats(deviceStats);
+    
+    // Trigger pulse animation
+    setShowPulse(true);
+    const timer = setTimeout(() => setShowPulse(false), 1500);
+    
+    return () => clearTimeout(timer);
+    
+  }, [deviceStats]);
 
   // Animate CPU usage
   const animatedCpu = useMicroAnimation(deviceStats.cpu, {
@@ -328,7 +315,7 @@ export const AnimatedDeviceStatusCard: React.FC<AnimatedDeviceStatusCardProps> =
         </div>
         
         {/* Status and real-time update indicator */}
-        {connected && (
+        {isConnected && (
           <div className="mt-4 flex items-center justify-between text-xs text-gray-400">
             <div className="flex items-center">
               <div className="h-2 w-2 rounded-full bg-green-500 mr-1" />

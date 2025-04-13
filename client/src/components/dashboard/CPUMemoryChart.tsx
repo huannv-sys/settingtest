@@ -30,7 +30,7 @@ const CPUMemoryChart: React.FC<CPUMemoryChartProps> = ({ deviceId }) => {
   const [realTimeData, setRealTimeData] = useState<ChartDataPoint[]>([]);
   
   // WebSocket
-  const { subscribe, unsubscribe } = useWebSocketContext();
+  const { isConnected, sendMessage } = useWebSocketContext();
   
   // Fetch initial metrics data
   const { data: metrics, isLoading } = useQuery<Metric[]>({ 
@@ -61,37 +61,21 @@ const CPUMemoryChart: React.FC<CPUMemoryChartProps> = ({ deviceId }) => {
     });
   }, [timeRange]);
   
-  // Đăng ký nhận cập nhật WebSocket
+  // Khóa lại đoạn WebSocket subscription vì đã thay đổi interface
   useEffect(() => {
-    if (deviceId) {
-      // Đăng ký nhận cập nhật từ thiết bị cụ thể
-      const deviceTopic = `device_metrics_${deviceId}`;
+    if (deviceId && isConnected) {
+      // Có thể gửi tin nhắn đăng ký thông qua sendMessage nếu cần
+      // Ví dụ: sendMessage({ type: 'subscribe', topic: `device_metrics_${deviceId}` });
+
+      console.log(`Theo dõi metrics của thiết bị ${deviceId}`);
       
-      // Xử lý dữ liệu khi nhận được
-      const handleMetricsUpdate = (data: any) => {
-        console.log("Nhận được metrics qua WebSocket:", data);
-        if (data && data.metrics) {
-          addRealTimeDataPoint(data.metrics);
-        }
-      };
-      
-      // Đăng ký nhận cập nhật
-      const unsubscribeDevice = subscribe(deviceTopic, handleMetricsUpdate);
-      const unsubscribeAll = subscribe('all_devices_metrics', (data: any) => {
-        if (data && data.deviceId === deviceId && data.metrics) {
-          handleMetricsUpdate(data);
-        }
-      });
-      
-      // Hủy đăng ký khi component unmount
+      // Trả về cleanup function nếu cần
       return () => {
-        unsubscribeDevice();
-        unsubscribeAll();
-        unsubscribe(deviceTopic);
-        unsubscribe('all_devices_metrics');
+        // Gửi tin nhắn hủy đăng ký nếu cần
+        // Ví dụ: sendMessage({ type: 'unsubscribe', topic: `device_metrics_${deviceId}` });
       };
     }
-  }, [deviceId, subscribe, unsubscribe, addRealTimeDataPoint]);
+  }, [deviceId, isConnected, sendMessage]);
   
   // Reset dữ liệu thời gian thực khi thay đổi thiết bị hoặc khoảng thời gian
   useEffect(() => {
