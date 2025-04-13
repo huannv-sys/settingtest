@@ -1888,6 +1888,617 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // SIEM API endpoints
+  router.post("/siem/report", async (req: Request, res: Response) => {
+    try {
+      const { startDate, endDate, deviceId, minConfidence = 0.9, format } = req.body;
+      
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu các tham số bắt buộc: startDate, endDate"
+        });
+      }
+      
+      const startTime = new Date(startDate);
+      const endTime = new Date(endDate);
+      
+      const { siemService } = await import('./services/siem');
+      
+      // Tạo báo cáo SIEM
+      const report = await siemService.generateAnomalyReport(
+        startTime,
+        endTime,
+        deviceId ? parseInt(deviceId) : undefined,
+        minConfidence
+      );
+      
+      // Xử lý phản hồi theo định dạng yêu cầu
+      if (format === 'cef') {
+        const cefLogs = siemService.convertToCEF(report);
+        return res.json({
+          success: true,
+          format: 'cef',
+          message: `Đã tạo ${cefLogs.length} bản ghi CEF`,
+          data: cefLogs
+        });
+      } else if (format === 'json') {
+        return res.json({
+          success: true,
+          format: 'json',
+          message: `Đã tạo báo cáo với ${report.total_anomalies} bất thường`,
+          data: report
+        });
+      } else {
+        // Mặc định trả về đầy đủ báo cáo
+        return res.json({
+          success: true,
+          message: `Đã tạo báo cáo với ${report.total_anomalies} bất thường`,
+          report: report
+        });
+      }
+    } catch (error) {
+      console.error("Lỗi khi tạo báo cáo SIEM:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi tạo báo cáo SIEM: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+
+  router.post("/siem/save-report", async (req: Request, res: Response) => {
+    try {
+      const { startDate, endDate, deviceId, minConfidence = 0.9, filename } = req.body;
+      
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu các tham số bắt buộc: startDate, endDate"
+        });
+      }
+      
+      const startTime = new Date(startDate);
+      const endTime = new Date(endDate);
+      
+      const { siemService } = await import('./services/siem');
+      
+      // Tạo báo cáo SIEM
+      const report = await siemService.generateAnomalyReport(
+        startTime,
+        endTime,
+        deviceId ? parseInt(deviceId) : undefined,
+        minConfidence
+      );
+      
+      // Lưu báo cáo vào file
+      const reportPath = await siemService.saveReportToFile(report, filename);
+      
+      res.json({
+        success: true,
+        message: `Đã lưu báo cáo với ${report.total_anomalies} bất thường`,
+        reportPath: reportPath
+      });
+    } catch (error) {
+      console.error("Lỗi khi lưu báo cáo SIEM:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi lưu báo cáo SIEM: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+
+  router.post("/siem/configure", async (req: Request, res: Response) => {
+    try {
+      const { type, url, apiKey, username, password, index, token, port, useSSL } = req.body;
+      
+      if (!type || !url) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu các tham số bắt buộc: type, url"
+        });
+      }
+      
+      const { siemClient } = await import('./services/siem/client');
+      
+      // Cấu hình kết nối SIEM
+      const configured = await siemClient.configureConnection({
+        type,
+        url,
+        apiKey,
+        username,
+        password,
+        index,
+        token,
+        port,
+        useSSL
+      });
+      
+      if (configured) {
+        res.json({
+          success: true,
+          message: `Đã cấu hình kết nối SIEM ${type} thành công`
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: `Không thể cấu hình kết nối SIEM ${type}`
+        });
+      }
+    } catch (error) {
+      console.error("Lỗi khi cấu hình SIEM:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi cấu hình SIEM: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+
+  router.post("/siem/send", async (req: Request, res: Response) => {
+    try {
+      const { startDate, endDate, deviceId, minConfidence = 0.9 } = req.body;
+      
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu các tham số bắt buộc: startDate, endDate"
+        });
+      }
+      
+      const startTime = new Date(startDate);
+      const endTime = new Date(endDate);
+      
+      const { siemService } = await import('./services/siem');
+      const { siemClient } = await import('./services/siem/client');
+      
+      // Tạo báo cáo SIEM
+      const report = await siemService.generateAnomalyReport(
+        startTime,
+        endTime,
+        deviceId ? parseInt(deviceId) : undefined,
+        minConfidence
+      );
+      
+      // Gửi báo cáo đến SIEM đã cấu hình
+      const result = await siemClient.sendReport(report);
+      
+      res.json({
+        success: result.success,
+        message: `Đã gửi ${result.sent}/${report.logs.length} sự kiện đến SIEM ${result.failed > 0 ? `(${result.failed} thất bại)` : ''}`,
+        sent: result.sent,
+        failed: result.failed,
+        totalEvents: report.logs.length
+      });
+    } catch (error) {
+      console.error("Lỗi khi gửi dữ liệu đến SIEM:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi gửi dữ liệu đến SIEM: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+
+  router.post("/siem/import-analyzer", async (req: Request, res: Response) => {
+    try {
+      // Nhận dữ liệu từ body
+      const { data, deviceId = 0, filepath } = req.body;
+      
+      if (!data && !filepath) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu tham số bắt buộc: data (chuỗi JSON) hoặc filepath (đường dẫn đến file)"
+        });
+      }
+      
+      const { pyAnalyzerAdapter } = await import('./services/siem/adapters');
+      
+      // Đọc báo cáo từ chuỗi JSON hoặc file
+      const pyReport = await pyAnalyzerAdapter.readReport(filepath || data);
+      
+      // Chuyển đổi sang định dạng SIEM
+      const siemReport = pyAnalyzerAdapter.convertToSIEMReport(pyReport, Number(deviceId));
+      
+      // Lấy thông tin thống kê
+      const uniqueIps = Object.keys(siemReport.ip_summary).length;
+      const highRiskIps = Object.values(siemReport.ip_summary)
+        .filter(ip => ip.severity === 'high').length;
+      
+      res.json({
+        success: true,
+        message: `Đã nhập báo cáo với ${siemReport.total_anomalies} bất thường từ ${uniqueIps} IP (${highRiskIps} IP nguy cơ cao)`,
+        data: {
+          report: siemReport,
+          stats: {
+            totalEvents: siemReport.total_anomalies,
+            uniqueIps: uniqueIps,
+            highRiskIps: highRiskIps
+          }
+        }
+      });
+    } catch (error) {
+      console.error("Lỗi khi nhập báo cáo Analyzer.py:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi nhập báo cáo Analyzer.py: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+  
+  // API xử lý file auth.log trực tiếp
+  router.post("/siem/process-auth-log", async (req: Request, res: Response) => {
+    try {
+      const { filepath, deviceId = 0 } = req.body;
+      
+      if (!filepath) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu tham số bắt buộc: filepath (đường dẫn đến file auth.log)"
+        });
+      }
+
+      // Kiểm tra file có tồn tại không
+      const fs = require('fs');
+      if (!fs.existsSync(filepath)) {
+        return res.status(404).json({
+          success: false,
+          message: `Không tìm thấy file: ${filepath}`
+        });
+      }
+
+      // Đọc nội dung file
+      const fileContent = fs.readFileSync(filepath, 'utf8');
+      
+      try {
+        // Sử dụng Wazuh service để xử lý auth.log nếu có
+        const { wazuhService } = await import('./services/siem/wazuh');
+        const siemReport = await wazuhService.processAuthLog(fileContent);
+        
+        // Lấy thông tin thống kê
+        const uniqueIps = Object.keys(siemReport.ip_summary).length;
+        const highRiskIps = Object.values(siemReport.ip_summary)
+          .filter(ip => ip.severity === 'high').length;
+        
+        return res.json({
+          success: true,
+          message: `Đã phân tích ${siemReport.logs.length} thất bại đăng nhập từ ${uniqueIps} IP (${highRiskIps} IP nguy cơ cao)`,
+          data: {
+            report: siemReport,
+            stats: {
+              totalEvents: siemReport.total_anomalies,
+              uniqueIps: uniqueIps,
+              highRiskIps: highRiskIps,
+              processedLines: fileContent.split('\n').length
+            }
+          }
+        });
+      } catch (wazuhError) {
+        console.warn(`Không thể sử dụng Wazuh service: ${wazuhError}, sử dụng phân tích cơ bản`);
+        
+        // Phân tích log theo định dạng giống Analyzer.py
+        const pattern = /^(\w{3} \d{1,2} \d{2}:\d{2}:\d{2}).*sshd.*Failed password for (invalid user )?(\w+) from ([\d.]+) port (\d+)/;
+        
+        const failed_attempts = [];
+        const ip_summary = {};
+        
+        // Phân tích từng dòng log
+        const lines = fileContent.split('\n');
+        for (const line of lines) {
+          const match = line.match(pattern);
+          if (match) {
+            const timestamp = match[1];
+            const user = match[3];
+            const ip = match[4];
+            
+            // Lưu thông tin thử đăng nhập thất bại
+            failed_attempts.push({
+              timestamp: timestamp,
+              user: user,
+              ip: ip,
+              raw: line.trim()
+            });
+            
+            // Cập nhật tóm tắt theo IP
+            if (!ip_summary[ip]) {
+              ip_summary[ip] = {
+                attempts: 0,
+                users: [],
+                timestamps: []
+              };
+            }
+            
+            ip_summary[ip].attempts++;
+            if (!ip_summary[ip].users.includes(user)) {
+              ip_summary[ip].users.push(user);
+            }
+            ip_summary[ip].timestamps.push(timestamp);
+          }
+        }
+        
+        // Tạo báo cáo dạng PyAnalyzer
+        const report = {
+          total_failed_attempts: failed_attempts.length,
+          ip_summary: ip_summary,
+          logs: failed_attempts
+        };
+        
+        // Chuyển đổi sang định dạng SIEM
+        const { pyAnalyzerAdapter } = await import('./services/siem/adapters');
+        const siemReport = pyAnalyzerAdapter.convertToSIEMReport(report, Number(deviceId));
+        
+        // Lấy thông tin thống kê
+        const uniqueIps = Object.keys(siemReport.ip_summary).length;
+        const highRiskIps = Object.values(siemReport.ip_summary)
+          .filter(ip => ip.severity === 'high').length;
+        
+        res.json({
+          success: true,
+          message: `Đã phân tích ${failed_attempts.length} thất bại đăng nhập từ ${uniqueIps} IP (${highRiskIps} IP nguy cơ cao)`,
+          data: {
+            report: siemReport,
+            stats: {
+              totalEvents: siemReport.total_anomalies,
+              uniqueIps: uniqueIps,
+              highRiskIps: highRiskIps,
+              processedLines: lines.length
+            }
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Lỗi khi xử lý file auth.log:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi xử lý file auth.log: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+  
+  // API endpoints cho tích hợp với Wazuh
+  router.post("/siem/wazuh/configure", async (req: Request, res: Response) => {
+    try {
+      const { apiUrl, username, password, sshKeyPath, mikrotikAddress, sshUsername, authLogPath } = req.body;
+      
+      if (!apiUrl || !username || !password) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu các tham số bắt buộc: apiUrl, username, password"
+        });
+      }
+      
+      const { wazuhService } = await import('./services/siem/wazuh');
+      
+      // Cấu hình Wazuh service
+      const configured = await wazuhService.configure({
+        apiUrl,
+        username,
+        password,
+        sshKeyPath,
+        mikrotikAddress,
+        sshUsername,
+        authLogPath
+      });
+      
+      if (configured) {
+        res.json({
+          success: true,
+          message: "Đã cấu hình kết nối Wazuh thành công"
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: "Không thể cấu hình kết nối Wazuh"
+        });
+      }
+    } catch (error) {
+      console.error("Lỗi khi cấu hình Wazuh:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi cấu hình Wazuh: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+  
+  router.post("/siem/wazuh/install-rules", async (req: Request, res: Response) => {
+    try {
+      const { rulesXml, decodersXml } = req.body;
+      
+      if (!rulesXml || !decodersXml) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu các tham số bắt buộc: rulesXml, decodersXml"
+        });
+      }
+      
+      const { wazuhService } = await import('./services/siem/wazuh');
+      
+      // Cài đặt rules và decoders
+      const installed = await wazuhService.installRulesAndDecoders(rulesXml, decodersXml);
+      
+      if (installed) {
+        res.json({
+          success: true,
+          message: "Đã cài đặt rules và decoders Wazuh thành công"
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: "Không thể cài đặt rules và decoders Wazuh"
+        });
+      }
+    } catch (error) {
+      console.error("Lỗi khi cài đặt rules và decoders Wazuh:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi cài đặt rules và decoders Wazuh: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+  
+  router.get("/siem/wazuh/alerts", async (req: Request, res: Response) => {
+    try {
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : 500;
+      const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
+      
+      const { wazuhService } = await import('./services/siem/wazuh');
+      
+      // Lấy danh sách alerts
+      const alerts = await wazuhService.getAlerts(limit, offset);
+      
+      // Chuyển đổi sang định dạng SIEM
+      const siemEvents = wazuhService.convertToSIEMEvents(alerts);
+      
+      res.json({
+        success: true,
+        message: `Đã lấy ${alerts.length} alerts từ Wazuh`,
+        data: {
+          total: alerts.length,
+          alerts: alerts,
+          siemEvents: siemEvents
+        }
+      });
+    } catch (error) {
+      console.error("Lỗi khi lấy alerts từ Wazuh:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi lấy alerts từ Wazuh: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+  
+  router.post("/siem/wazuh/block-ip", async (req: Request, res: Response) => {
+    try {
+      const { ip, duration = 90 } = req.body;
+      
+      if (!ip) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu tham số bắt buộc: ip"
+        });
+      }
+      
+      const { wazuhService } = await import('./services/siem/wazuh');
+      
+      // Chặn IP trên MikroTik
+      const blocked = await wazuhService.blockIPOnMikrotik(ip, duration);
+      
+      if (blocked) {
+        res.json({
+          success: true,
+          message: `Đã chặn IP ${ip} trên MikroTik trong ${duration} ngày`
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          message: `Không thể chặn IP ${ip} trên MikroTik`
+        });
+      }
+    } catch (error) {
+      console.error("Lỗi khi chặn IP trên MikroTik:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi chặn IP trên MikroTik: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+  
+  // API endpoints cho tích hợp với AbuseIPDB
+  router.post("/siem/abuseipdb/configure", async (req: Request, res: Response) => {
+    try {
+      const { apiKey, maxAgeInDays = 90, confidenceThreshold = 25 } = req.body;
+      
+      if (!apiKey) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu tham số bắt buộc: apiKey"
+        });
+      }
+      
+      const { abuseIPDBService } = await import('./services/siem/abuseipdb');
+      
+      // Cấu hình AbuseIPDB service
+      abuseIPDBService.configure({
+        apiKey,
+        maxAgeInDays,
+        confidenceThreshold
+      });
+      
+      res.json({
+        success: true,
+        message: "Đã cấu hình AbuseIPDB thành công",
+        config: {
+          maxAgeInDays,
+          confidenceThreshold
+        }
+      });
+    } catch (error) {
+      console.error("Lỗi khi cấu hình AbuseIPDB:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi cấu hình AbuseIPDB: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+  
+  router.post("/siem/abuseipdb/check", async (req: Request, res: Response) => {
+    try {
+      const { ip, deviceId = 0 } = req.body;
+      
+      if (!ip) {
+        return res.status(400).json({
+          success: false,
+          message: "Thiếu tham số bắt buộc: ip"
+        });
+      }
+      
+      const { abuseIPDBService } = await import('./services/siem/abuseipdb');
+      
+      // Kiểm tra danh tiếng IP
+      const result = await abuseIPDBService.checkIpReputation(ip);
+      
+      if (!result) {
+        return res.status(500).json({
+          success: false,
+          message: `Không thể kiểm tra danh tiếng của IP ${ip}`
+        });
+      }
+      
+      // Tạo sự kiện SIEM
+      const siemEvent = abuseIPDBService.createSIEMEvent(result, null, Number(deviceId));
+      
+      // Tự động chặn IP nếu danh tiếng xấu
+      let blockResult = null;
+      if (result.isBlacklisted) {
+        try {
+          const { wazuhService } = await import('./services/siem/wazuh');
+          blockResult = await wazuhService.blockIPOnMikrotik(ip);
+          
+          if (blockResult) {
+            result.isBlocked = true;
+            result.blacklistSource = 'AbuseIPDB Automatic Block';
+          }
+        } catch (blockError) {
+          console.warn(`Không thể tự động chặn IP ${ip}: ${blockError}`);
+        }
+      }
+      
+      res.json({
+        success: true,
+        message: `Đã kiểm tra danh tiếng IP ${ip} (${result.confidenceScore}/100)`,
+        data: {
+          reputation: result,
+          siemEvent: siemEvent,
+          blocked: result.isBlocked,
+          blockResult: blockResult
+        }
+      });
+    } catch (error) {
+      console.error("Lỗi khi kiểm tra danh tiếng IP:", error);
+      res.status(500).json({
+        success: false,
+        message: `Lỗi khi kiểm tra danh tiếng IP: ${error instanceof Error ? error.message : String(error)}`
+      });
+    }
+  });
+
   // Endpoint kiểm tra phát hiện xâm nhập
 
   // Endpoint kiểm tra phát hiện xâm nhập
