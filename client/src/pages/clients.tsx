@@ -92,39 +92,20 @@ const ClientsPage: React.FC = () => {
   const [interfaceInfo, setInterfaceInfo] = useState<RouterInterface[]>([]);
   
   // Sử dụng hook để lấy context
-  const { subscribe, unsubscribe } = useWebSocketContext();
+  const { isConnected, sendMessage } = useWebSocketContext();
 
   // Fetch clients on component mount
   useEffect(() => {
     fetchDevices();
     
-    // Subscribe to WebSocket events for real-time updates
-    subscribe('network-devices-update', (data) => {
-      if (data && Array.isArray(data)) {
-        setClients(prev => {
-          // Update existing clients with new data
-          const updated = [...prev];
-          data.forEach(newDevice => {
-            const index = updated.findIndex(d => d.id === newDevice.id);
-            if (index >= 0) {
-              updated[index] = { ...updated[index], ...newDevice };
-            } else {
-              updated.push(newDevice);
-            }
-          });
-          return updated;
-        });
-      } else if (data && typeof data === 'object') {
-        // Single device update
-        updateClientInList(data);
-      }
-    });
-
-    // Cleanup function
-    return () => {
-      unsubscribe('network-devices-update');
-    };
-  }, []);
+    // Kiểm tra kết nối WebSocket
+    if (isConnected) {
+      console.log("WebSocket connected in ClientsPage");
+      
+      // Có thể gửi thông báo đăng ký nếu cần
+      // sendMessage({ type: 'subscribe', topic: 'network-devices-update' });
+    }
+  }, [isConnected]);
   
   // Khi chọn thiết bị, tải dữ liệu client của thiết bị đó
   useEffect(() => {
