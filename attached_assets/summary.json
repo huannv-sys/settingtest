@@ -1,0 +1,30 @@
+{
+    "total_failed_attempts": 2,
+    "ip_summary": {
+        "192.168.1.24": {
+            "attempts": 2,
+            "users": [
+                "test",
+                "root"
+            ],
+            "timestamps": [
+                "Apr 10 14:22:31",
+                "Apr 10 14:23:10"
+            ]
+        }
+    },
+    "logs": [
+        {
+            "timestamp": "Apr 10 14:22:31",
+            "user": "test",
+            "ip": "192.168.1.24",
+            "raw": "Apr 10 14:22:31 ubuntu sshd[12345]: Failed password for invalid user test from 192.168.1.24 port 22 ssh2"
+        },
+        {
+            "timestamp": "Apr 10 14:23:10",
+            "user": "root",
+            "ip": "192.168.1.24",
+            "raw": "Apr 10 14:23:10 ubuntu sshd[12346]: Failed password for root from 192.168.1.24 port 22 ssh2"
+        }
+    ]
+}
