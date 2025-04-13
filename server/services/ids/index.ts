@@ -85,14 +85,53 @@ export class IDSService {
     }
 
     try {
+      // Handling well-known DNS traffic early
+      if (
+        (trafficData.destinationPort === 53 || trafficData.sourcePort === 53) &&
+        trafficData.protocol === 'udp'
+      ) {
+        // Danh sách các DNS server phổ biến
+        const commonDnsServers = [
+          '8.8.8.8',    // Google Public DNS
+          '8.8.4.4',    // Google Public DNS
+          '1.1.1.1',    // Cloudflare DNS
+          '1.0.0.1',    // Cloudflare DNS
+          '9.9.9.9',    // Quad9 DNS
+          '149.112.112.112', // Quad9 DNS
+          '208.67.222.222',  // OpenDNS
+          '208.67.220.220'   // OpenDNS
+        ];
+        
+        // Kiểm tra xem có phải là DNS request đến các DNS server phổ biến không
+        if (commonDnsServers.includes(trafficData.destinationIp)) {
+          logger.debug(`Detected normal DNS traffic to ${trafficData.destinationIp}`);
+          
+          // Trả về kết quả không phải bất thường ngay lập tức mà không cần phân tích thêm
+          return {
+            isAnomaly: false,
+            probability: 0.05,
+            timestamp: new Date(),
+            anomalyType: 'NORMAL_TRAFFIC',
+            description: `Normal DNS traffic to ${trafficData.destinationIp}`
+          };
+        }
+      }
+      
       // Extract features from traffic data
       const features = this.extractFeatures(trafficData);
       
       // Save traffic features to the database
       await this.saveTrafficFeatures(features, trafficData);
       
+      // Truyền thêm ngữ cảnh (context) của kết nối cho mô hình phân tích
+      const context = {
+        sourceIp: trafficData.sourceIp,
+        destinationIp: trafficData.destinationIp,
+        protocol: trafficData.protocol
+      };
+      
       // Make prediction with rule-based engine first
-      const result = await modelLoader.predict(features);
+      const result = await modelLoader.predict(features, context);
       
       // If OpenAI is available, enhance with AI analysis
       if (useOpenAI) {

@@ -1662,16 +1662,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
               const protoMatch = message.match(/proto (\w+)/);
               const protocol = protoMatch ? protoMatch[1].toLowerCase() : 'unknown';
               
+              // Phân tích log để xác định có phải là hành vi bất thường không
+              let isAnomaly = false;
+              let attackType = 'Normal Traffic';
+              let probability = 0.0;
+
               // Xác định loại tấn công dựa trên các pattern trong log
-              let attackType = 'Unknown';
               if (message.includes('SYN flood')) {
+                isAnomaly = true;
                 attackType = 'DoS Attack';
-              } else if (message.includes('port scan') || (protocol === 'tcp' && message.includes('SYN'))) {
+                probability = 0.85 + (Math.random() * 0.15); // Giá trị ngẫu nhiên từ 0.85-1.0
+              } else if (message.includes('port scan')) {
+                isAnomaly = true;
                 attackType = 'Port Scan';
-              } else if (message.includes('brute force') || (destinationPort === 22 || destinationPort === 23)) {
+                probability = 0.85 + (Math.random() * 0.15);
+              } else if (message.includes('brute force')) {
+                isAnomaly = true;
                 attackType = 'Brute Force';
-              } else if (message.includes('drop')) {
-                attackType = 'Blocked Traffic';
+                probability = 0.85 + (Math.random() * 0.15);
+              } else if (destinationPort === 22 && message.includes('drop')) {
+                isAnomaly = true;
+                attackType = 'Possible SSH Attack';
+                probability = 0.70 + (Math.random() * 0.15);
+              } else if (destinationPort === 3389 && message.includes('drop')) {
+                isAnomaly = true;
+                attackType = 'Possible RDP Attack';
+                probability = 0.75 + (Math.random() * 0.15);
+              } else if (message.includes('drop') && !message.includes('8.8.8.8')) {
+                // Không coi kết nối DNS đến Google DNS là bất thường
+                isAnomaly = Math.random() > 0.7; // Chỉ một số connection bị drop mới là bất thường
+                attackType = isAnomaly ? 'Blocked Traffic' : 'Normal Traffic';
+                probability = isAnomaly ? 0.65 + (Math.random() * 0.2) : 0.1 + (Math.random() * 0.2);
               }
               
               return {
@@ -1683,11 +1704,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 sourcePort: sourcePort,
                 destinationPort: destinationPort,
                 protocol: protocol,
-                isAnomaly: true,
-                probability: 0.85 + (Math.random() * 0.15), // Giá trị ngẫu nhiên từ 0.85-1.0
+                isAnomaly: isAnomaly,
+                probability: probability,
                 timestamp: new Date(new Date().setMinutes(new Date().getMinutes() - index * 5)), // Random timestamp trong 1 giờ qua
                 attackType: attackType,
-                confidenceScore: (0.85 + (Math.random() * 0.15)).toFixed(2),
+                confidenceScore: probability.toFixed(2),
                 details: {
                   message: message,
                   sourceIp: sourceIp,
@@ -1709,7 +1730,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      // Nếu không có dữ liệu real hoặc dữ liệu database, tạo dữ liệu mẫu chỉ để hiển thị UI
+      // Nếu không có dữ liệu real hoặc dữ liệu database, tạo dữ liệu mẫu thực tế hơn để hiển thị UI
       if (anomalies.length === 0) {
         const deviceId = parseInt(req.query.deviceId as string || '2');
         
@@ -1717,69 +1738,141 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const device = await db.select().from(schema.devices).where(eq(schema.devices.id, deviceId)).limit(1);
         const deviceIp = device && device.length > 0 ? device[0].ipAddress : '192.168.1.1';
         
-        // Tạo 3 bản ghi mẫu từ thiết bị thực
-        anomalies = [
-          {
-            id: 1,
-            trafficFeatureId: 1001,
-            deviceId: deviceId,
-            sourceIp: '203.113.131.45', // IP bên ngoài
-            destinationIp: deviceIp,
-            sourcePort: 56789,
-            destinationPort: 22,
-            protocol: 'tcp',
-            isAnomaly: true,
-            probability: 0.95,
-            timestamp: new Date(Date.now() - 10 * 60 * 1000), // 10 phút trước
-            attackType: 'Brute Force',
-            confidenceScore: '0.95',
-            details: {
-              message: `Phát hiện nhiều kết nối thất bại đến SSH từ 203.113.131.45`,
-              sourceIp: '203.113.131.45',
-              destinationIp: deviceIp
-            }
-          },
-          {
-            id: 2,
-            trafficFeatureId: 1002,
-            deviceId: deviceId,
-            sourceIp: '121.45.67.89',
-            destinationIp: deviceIp,
-            sourcePort: 45678,
-            destinationPort: 80,
-            protocol: 'tcp',
-            isAnomaly: true,
-            probability: 0.92,
-            timestamp: new Date(Date.now() - 30 * 60 * 1000), // 30 phút trước
-            attackType: 'Port Scan',
-            confidenceScore: '0.92',
-            details: {
-              message: `Phát hiện quét cổng từ 121.45.67.89 đến nhiều cổng dịch vụ`,
-              sourceIp: '121.45.67.89',
-              destinationIp: deviceIp
-            }
-          },
-          {
-            id: 3,
-            trafficFeatureId: 1003,
-            deviceId: deviceId,
-            sourceIp: '45.76.123.45',
-            destinationIp: deviceIp,
-            sourcePort: 12345,
-            destinationPort: 443,
-            protocol: 'tcp',
-            isAnomaly: true,
-            probability: 0.88,
-            timestamp: new Date(Date.now() - 120 * 60 * 1000), // 2 giờ trước
-            attackType: 'DoS Attack',
-            confidenceScore: '0.88',
-            details: {
-              message: `Phát hiện nhiều kết nối đồng thời từ 45.76.123.45 đến cổng HTTPS`,
-              sourceIp: '45.76.123.45',
-              destinationIp: deviceIp
-            }
+        // Tạo mẫu kết hợp giữa lưu lượng bình thường và bất thường để có tỉ lệ thực tế hơn
+        const sampleData = [];
+        
+        // Thêm một số bất thường
+        sampleData.push({
+          id: 1,
+          trafficFeatureId: 1001,
+          deviceId: deviceId,
+          sourceIp: '203.113.131.45', // IP bên ngoài
+          destinationIp: deviceIp,
+          sourcePort: 56789,
+          destinationPort: 22,
+          protocol: 'tcp',
+          isAnomaly: true,
+          probability: 0.95,
+          timestamp: new Date(Date.now() - 10 * 60 * 1000), // 10 phút trước
+          attackType: 'Brute Force',
+          confidenceScore: '0.95',
+          details: {
+            message: `Phát hiện nhiều kết nối thất bại đến SSH từ 203.113.131.45`,
+            sourceIp: '203.113.131.45',
+            destinationIp: deviceIp
           }
-        ];
+        });
+        
+        // Thêm các kết nối bình thường
+        sampleData.push({
+          id: 2,
+          trafficFeatureId: 1002,
+          deviceId: deviceId,
+          sourceIp: '192.168.1.101',
+          destinationIp: '8.8.8.8', // Google DNS - lưu lượng bình thường
+          sourcePort: 45123,
+          destinationPort: 53,
+          protocol: 'udp',
+          isAnomaly: false,
+          probability: 0.05,
+          timestamp: new Date(Date.now() - 15 * 60 * 1000),
+          attackType: 'Normal Traffic',
+          confidenceScore: '0.05',
+          details: {
+            message: `Truy vấn DNS đến Google DNS`,
+            sourceIp: '192.168.1.101',
+            destinationIp: '8.8.8.8'
+          }
+        });
+        
+        sampleData.push({
+          id: 3,
+          trafficFeatureId: 1003,
+          deviceId: deviceId,
+          sourceIp: '192.168.1.102',
+          destinationIp: '172.217.31.142', // Google - lưu lượng bình thường
+          sourcePort: 54321,
+          destinationPort: 443,
+          protocol: 'tcp',
+          isAnomaly: false,
+          probability: 0.03,
+          timestamp: new Date(Date.now() - 20 * 60 * 1000),
+          attackType: 'Normal Traffic',
+          confidenceScore: '0.03',
+          details: {
+            message: `Kết nối HTTPS đến Google`,
+            sourceIp: '192.168.1.102',
+            destinationIp: '172.217.31.142'
+          }
+        });
+        
+        // Thêm lưu lượng bất thường khác
+        sampleData.push({
+          id: 4,
+          trafficFeatureId: 1004,
+          deviceId: deviceId,
+          sourceIp: '121.45.67.89',
+          destinationIp: deviceIp,
+          sourcePort: 45678,
+          destinationPort: 80,
+          protocol: 'tcp',
+          isAnomaly: true,
+          probability: 0.92,
+          timestamp: new Date(Date.now() - 30 * 60 * 1000), // 30 phút trước
+          attackType: 'Port Scan',
+          confidenceScore: '0.92',
+          details: {
+            message: `Phát hiện quét cổng từ 121.45.67.89 đến nhiều cổng dịch vụ`,
+            sourceIp: '121.45.67.89',
+            destinationIp: deviceIp
+          }
+        });
+        
+        // Thêm lưu lượng bình thường
+        sampleData.push({
+          id: 5,
+          trafficFeatureId: 1005,
+          deviceId: deviceId,
+          sourceIp: '192.168.1.105',
+          destinationIp: '192.168.1.1', // Router LAN
+          sourcePort: 65123,
+          destinationPort: 80,
+          protocol: 'tcp',
+          isAnomaly: false,
+          probability: 0.02,
+          timestamp: new Date(Date.now() - 45 * 60 * 1000),
+          attackType: 'Normal Traffic',
+          confidenceScore: '0.02',
+          details: {
+            message: `Kết nối đến giao diện quản trị router`,
+            sourceIp: '192.168.1.105',
+            destinationIp: '192.168.1.1'
+          }
+        });
+        
+        // Thêm lưu lượng bất thường
+        sampleData.push({
+          id: 6,
+          trafficFeatureId: 1006,
+          deviceId: deviceId,
+          sourceIp: '45.76.123.45',
+          destinationIp: deviceIp,
+          sourcePort: 12345,
+          destinationPort: 443,
+          protocol: 'tcp',
+          isAnomaly: true,
+          probability: 0.88,
+          timestamp: new Date(Date.now() - 120 * 60 * 1000), // 2 giờ trước
+          attackType: 'DoS Attack',
+          confidenceScore: '0.88',
+          details: {
+            message: `Phát hiện nhiều kết nối đồng thời từ 45.76.123.45 đến cổng HTTPS`,
+            sourceIp: '45.76.123.45',
+            destinationIp: deviceIp
+          }
+        });
+        
+        anomalies = sampleData;
       }
       
       res.json({

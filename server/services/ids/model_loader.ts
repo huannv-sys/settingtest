@@ -408,8 +408,13 @@ class ModelLoader {
   /**
    * Make a prediction using the rule-based detection
    * @param features The features to use for prediction
+   * @param context Additional context information about the connection
    */
-  public async predict(features: Record<string, number>): Promise<PredictionResult> {
+  public async predict(features: Record<string, number>, context?: {
+    sourceIp?: string;
+    destinationIp?: string;
+    protocol?: string;
+  }): Promise<PredictionResult> {
     try {
       // Clean old entries
       this.trafficMemory.cleanOldEntries();
@@ -424,9 +429,39 @@ class ModelLoader {
       const bwdBytes = features['Total Length of Bwd Packets'] || 0;
       const totalBytes = fwdBytes + bwdBytes;
       
-      // Apply rule-based detection - use dummy IP addresses for testing
-      const sourceIp = "192.168.1.100";
-      const destinationIp = "192.168.1.1";
+      // Danh sách các DNS server phổ biến
+      const commonDnsServers = [
+        '8.8.8.8',    // Google Public DNS
+        '8.8.4.4',    // Google Public DNS
+        '1.1.1.1',    // Cloudflare DNS
+        '1.0.0.1',    // Cloudflare DNS
+        '9.9.9.9',    // Quad9 DNS
+        '149.112.112.112', // Quad9 DNS
+        '208.67.222.222',  // OpenDNS
+        '208.67.220.220'   // OpenDNS
+      ];
+      
+      // Kiểm tra nhanh nếu là DNS traffic thông thường
+      if (
+        destinationPort === 53 && 
+        context?.protocol === 'udp' && 
+        context?.destinationIp && 
+        commonDnsServers.includes(context.destinationIp)
+      ) {
+        logger.debug(`Normal DNS traffic to ${context.destinationIp} detected by model_loader`);
+        return {
+          isAnomaly: false,
+          probability: 0.02,
+          timestamp: new Date(),
+          features,
+          anomalyType: 'NORMAL_TRAFFIC',
+          description: `Normal DNS traffic to ${context.destinationIp}`
+        };
+      }
+      
+      // Sử dụng các IP từ context nếu có, ngược lại dùng giá trị mẫu
+      const sourceIp = context?.sourceIp || "192.168.1.100";
+      const destinationIp = context?.destinationIp || "192.168.1.1";
       
       // Anomaly results for each attack type
       const portScanResult = this.detectPortScan(sourceIp, destinationIp, destinationPort);
